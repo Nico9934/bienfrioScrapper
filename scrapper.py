@@ -14,8 +14,8 @@ categories = [
 
 # Reemplaza con tus credenciales
 credentials = {
-    "log": "34645478",  # Cambia esto por tu nombre de usuario
-    "pwd": "Biomac-23-34645478-4",  # Cambia esto por tu contraseña
+    "log": "",  # Cambia esto por tu nombre de usuario
+    "pwd": "",  # Cambia esto por tu contraseña
     "redirect_to": login_url,
     "testcookie": "1"
 }
