@@ -1,8 +1,17 @@
+# Importar bibliotecas necesarias
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
 import math
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill, Font, Border, Side
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from dotenv import load_dotenv
+import os
+
+# Cargar las variables de entorno desde .env
+load_dotenv()
 
 # Credenciales de inicio de sesión
 login_url = "https://reventa.biomac.com.ar/wp-login.php"
@@ -12,10 +21,10 @@ categories = [
     "https://reventa.biomac.com.ar/categoria-producto/helados/",
 ]
 
-# Reemplaza con tus credenciales
+# Cargar credenciales desde variables de entorno
 credentials = {
-    "log": "",  # Cambia esto por tu nombre de usuario
-    "pwd": "",  # Cambia esto por tu contraseña
+    "log": os.getenv("LOG"),  # Usuario desde el archivo .env
+    "pwd": os.getenv("PWD"),  # Contraseña desde el archivo .env
     "redirect_to": login_url,
     "testcookie": "1"
 }
@@ -55,7 +64,13 @@ if response.status_code == 200 and "dashboard" not in response.url:
 
                 # Descuento (si existe)
                 discount_span = card.find("span", class_="onsale off")
-                discount = re.search(r"(\d+)", discount_span.text).group(1) if discount_span else "0"
+                try:
+                    discount = (
+                        int(re.search(r"(\d+)", discount_span.text).group(1)) if discount_span else 0
+                    )
+                except ValueError:
+                    print(f"Error al convertir descuento: {discount_span.text if discount_span else 'N/A'}")
+                    discount = 0
 
                 # Verificar si no hay stock
                 out_of_stock_span = card.find("span", class_="out_of_stock")
@@ -86,6 +101,13 @@ if response.status_code == 200 and "dashboard" not in response.url:
                                     .replace(",", ".")
                                 )
 
+                # Limpieza y validación del precio base
+                try:
+                    current_price = float(current_price) if current_price and current_price != "SIN STOCK" else None
+                except ValueError:
+                    print(f"Error al convertir precio: {current_price}")
+                    current_price = None
+
                 # Peso (extraemos en base a regex)
                 def extract_weight(title):
                     match = re.search(r"(\d+(?:,\d+)?)(?=\s?(kg|gr|g))", title, re.IGNORECASE)
@@ -101,26 +123,28 @@ if response.status_code == 200 and "dashboard" not in response.url:
                 def clean_title(title):
                     return re.sub(r"\s?por\s?.*", "", title, flags=re.IGNORECASE).strip()
 
-                # Mínimo de compra (obtenido del atributo "min")
+                # Mínimo de compra
                 quantity_div = card.find("div", class_="quantity")
                 min_purchase = "N/A"
                 if quantity_div:
                     min_input = quantity_div.find("input", class_="input-text qty text")
-                    if min_input and min_input.get("min"):
-                        min_purchase = min_input["min"]
+                    if min_input:
+                        min_value = min_input.get("min", "1")  # Tomar el valor del atributo 'min' (si no, usar 1)
+                        value = min_input.get("value", "1")  # Tomar el valor del atributo 'value' como fallback
+                        min_purchase = int(min_value) if min_value and int(min_value) > 1 else int(value)
 
                 # Porcentaje de ganancia predeterminado (en Excel será editable)
                 profit_margin = 30
 
                 # Precio final con ganancia
                 def calculate_final_price(price, margin):
-                    if price and price.isnumeric():
+                    if price is not None:
                         return float(price) * (1 + margin / 100)
                     return None
 
                 # Redondeo hacia arriba
                 def round_up_price(price):
-                    if price:
+                    if price is not None:
                         return int(math.ceil(price / 100.0) * 100)
                     return None
 
@@ -131,13 +155,13 @@ if response.status_code == 200 and "dashboard" not in response.url:
                 # Agregamos los datos procesados
                 all_products.append({
                     "Producto": clean_title(title),
-                    "Precio Base ($)": current_price.replace(".", ","),  # Reemplazamos el punto por coma
+                    "Precio Base ($)": current_price,
                     "Peso (kg)": extract_weight(title),
-                    "Descuento": discount,
+                    "Descuento (%)": discount,
                     "Mínimo de Compra": min_purchase,
                     "Categoría": category_name,
                     "Porcentaje de Ganancia (%)": profit_margin,
-                    "Precio Final ($)": str(final_price).replace(".", ","),  # Formato para Excel
+                    "Precio Final ($)": final_price,
                     "Precio Redondeado ($)": rounded_price
                 })
 
@@ -146,11 +170,48 @@ if response.status_code == 200 and "dashboard" not in response.url:
     
     # Guardamos los datos en un DataFrame
     df = pd.DataFrame(all_products)
-    
-    # Guardamos el DataFrame en un archivo Excel
+
+    # Crear un archivo Excel con estilos
     output_file = "productos_biomac.xlsx"
-    df.to_excel(output_file, index=False, engine="openpyxl")
-    
+    wb = Workbook()
+    ws = wb.active
+    ws.append(df.columns.tolist())  # Agregar encabezados
+
+    # Estilo de encabezados
+    header_fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+    for col_idx, header in enumerate(df.columns, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = border
+
+    # Aplicar datos y bordes a las filas
+    category_colors = {
+        "vegetales": "00913f",  # Verde
+        "frutas": "ffa127",     # Naranja
+        "helados": "24afff",    # Celeste
+    }
+
+    for index, row in df.iterrows():
+        color = category_colors.get(row["Categoría"], "FFFFFF")  # Default blanco
+        fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
+        font = Font(color="FFFFFF" if row["Categoría"] in category_colors else "000000")
+
+        for col_idx, value in enumerate(row, start=1):
+            cell = ws.cell(row=index + 2, column=col_idx)
+            cell.value = value
+            cell.fill = fill
+            cell.font = font
+            cell.border = border
+
+    # Agregar filtro en encabezados
+    ws.auto_filter.ref = f"A1:I{len(df) + 1}"  # Ajustar el rango según la cantidad de filas
+
+    # Guardar el archivo Excel
+    wb.save(output_file)
     print(f"Datos extraídos y guardados en: {output_file}")
 else:
     print("Error en el inicio de sesión. Verifica tus credenciales.")
