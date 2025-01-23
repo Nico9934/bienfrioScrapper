@@ -1,122 +1,68 @@
-# Importar bibliotecas necesarias
+import os
+import json
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import re
-import math
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Font, Border, Side
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from openpyxl.styles.numbers import BUILTIN_FORMATS
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
-from dotenv import load_dotenv
-import os
 from datetime import datetime
+from dotenv import load_dotenv
 
-# Cargar las variables de entorno desde .env
+# Cargar variables de entorno
 load_dotenv()
 
-# Credenciales de inicio de sesión
+# Credenciales y URLs
 login_url = "https://reventa.biomac.com.ar/wp-login.php"
 categories = [
     "https://reventa.biomac.com.ar/categoria-producto/vegetales/",
     "https://reventa.biomac.com.ar/categoria-producto/frutas/",
     "https://reventa.biomac.com.ar/categoria-producto/helados/",
 ]
-
-# Cargar credenciales desde variables de entorno
 credentials = {
-    "log": os.getenv("LOG"),  # Usuario desde el archivo .env
-    "pwd": os.getenv("PWD"),  # Contraseña desde el archivo .env
+    "log": os.getenv("LOG"),  # Usuario
+    "pwd": os.getenv("PWD"),  # Contraseña
     "redirect_to": login_url,
     "testcookie": "1"
 }
 
-# Crear una sesión para mantener las cookies
-session = requests.Session()
+# Función para cargar el porcentaje de ganancia desde el archivo JSON
+def load_gain_percentages(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+        # Crear un diccionario para facilitar la búsqueda
+        return {item["Producto"]: int(item["Porcentaje de Ganancia (%)"]) for item in data}
+    except Exception as e:
+        print(f"Error al cargar el archivo JSON: {e}")
+        return {}
 
-# Realizar el login
+# Crear sesión para mantener autenticación
+session = requests.Session()
 response = session.post(login_url, data=credentials)
 
-# Verificar si el login fue exitoso
 if response.status_code == 200 and "dashboard" not in response.url:
     print("Inicio de sesión exitoso.")
 
-    all_products = []  # Lista para almacenar todos los productos de todas las categorías
+    all_products = []
+    gain_percentages = load_gain_percentages("percentListGain.json")  # Cargar porcentajes desde el JSON
 
     for category_url in categories:
-        # Acceder a la página protegida con la sesión autenticada
         response = session.get(category_url)
-
-        # Verificamos si la solicitud fue exitosa
         if response.status_code == 200:
-            print(f"Acceso exitoso a la página de productos: {category_url}")
             soup = BeautifulSoup(response.content, "html.parser")
-
-            # Extraemos las cards de productos
             cards = soup.find_all(class_="item-producto-bio")
-            
-            # Obtenemos la categoría a partir de la URL
+
+            # Obtener categoría a partir de la URL
             category_name = re.search(r"categoria-producto/([^/]+)/", category_url)
-            category_name = category_name.group(1) if category_name else "Desconocido"
+            category_name = category_name.group(1).capitalize() if category_name else "Desconocido"
 
-            # Procesamos cada card
+            # Extraer productos
             for card in cards:
-                # Título del producto
                 title = card.find(class_="woocommerce-loop-product__title").text.strip()
-
-                # Verificar si no hay stock
-                out_of_stock_span = card.find("span", class_="out_of_stock")
-                if out_of_stock_span:
-                    current_price = "SIN STOCK"
-                    base_price = None
-                else:
-                    # Precio base y precio con descuento
-                    price_span = card.find("span", class_="price")
-                    base_price = None
-                    discount_price = None
-
-                    if price_span:
-                        # Precio base (tachado)
-                        base_del = price_span.find("del", attrs={"aria-hidden": "true"})
-                        if base_del:
-                            base_price = (
-                                base_del.find("bdi").text.strip()
-                                .replace("$", "")
-                                .replace(".", "")
-                                .replace(",", ".")
-                            )
-
-                        # Precio con descuento (ins)
-                        price_ins = price_span.find("ins", attrs={"aria-hidden": "true"})
-                        if price_ins:
-                            discount_price = (
-                                price_ins.find("bdi").text.strip()
-                                .replace("$", "")
-                                .replace(".", "")
-                                .replace(",", ".")
-                            )
-                        else:
-                            # Caso: Sin descuento, usar precio regular
-                            price_regular = price_span.find("span", class_="woocommerce-Price-amount")
-                            if price_regular:
-                                discount_price = (
-                                    price_regular.find("bdi").text.strip()
-                                    .replace("$", "")
-                                    .replace(".", "")
-                                    .replace(",", ".")
-                                )
-
-                # Limpieza y validación de los precios
-                try:
-                    base_price = float(base_price) if base_price else None
-                except ValueError:
-                    print(f"Error al convertir precio base: {base_price}")
-                    base_price = None
-
-                try:
-                    discount_price = float(discount_price) if discount_price and discount_price != "SIN STOCK" else None
-                except ValueError:
-                    print(f"Error al convertir precio con descuento: {discount_price}")
-                    discount_price = None
 
                 # Peso (extraemos en base a regex)
                 def extract_weight(title):
@@ -133,101 +79,140 @@ if response.status_code == 200 and "dashboard" not in response.url:
                 def clean_title(title):
                     return re.sub(r"\s?por\s?.*", "", title, flags=re.IGNORECASE).strip()
 
-                # Mínimo de compra
-                quantity_div = card.find("div", class_="quantity")
-                min_purchase = "N/A"
-                if quantity_div:
-                    min_input = quantity_div.find("input", class_="input-text qty text")
-                    if min_input:
-                        min_value = min_input.get("min", "1")  # Tomar el valor del atributo 'min' (si no, usar 1)
-                        value = min_input.get("value", "1")  # Tomar el valor del atributo 'value' como fallback
-                        min_purchase = int(min_value) if min_value and int(min_value) > 1 else int(value)
+                cleaned_title = clean_title(title)
+                weight = extract_weight(title)
 
-                # Porcentaje de ganancia predeterminado (en Excel será editable)
-                profit_margin = 30
+                # Precios base y con descuento
+                price_span = card.find("span", class_="price")
+                base_price = discount_price = None
 
-                # Precio final con ganancia
-                def calculate_final_price(price, margin):
-                    if price is not None:
-                        return float(price) * (1 + margin / 100)
-                    return None
+                if price_span:
+                    # Buscar precio base (tachado) y precio con descuento
+                    base_del = price_span.find("del", attrs={"aria-hidden": "true"})
+                    discount_ins = price_span.find("ins", attrs={"aria-hidden": "true"})
 
-                # Redondeo hacia arriba
-                def round_up_price(price):
-                    if price is not None:
-                        return int(math.ceil(price / 100.0) * 100)
-                    return None
+                    # Si hay precio tachado (base) y precio en "ins" (con descuento)
+                    if base_del and discount_ins:
+                        base_price = (
+                            base_del.find("bdi").text.strip().replace("$", "").replace(".", "").replace(",", ".")
+                        )
+                        discount_price = (
+                            discount_ins.find("bdi").text.strip().replace("$", "").replace(".", "").replace(",", ".")
+                        )
+                    else:
+                        # Si no hay descuento, el precio base es el único mostrado
+                        regular_price = price_span.find("span", class_="woocommerce-Price-amount")
+                        base_price = (
+                            regular_price.find("bdi").text.strip().replace("$", "").replace(".", "").replace(",", ".")
+                            if regular_price else None
+                        )
 
-                # Calculamos el precio final y el redondeado
-                final_price = calculate_final_price(discount_price, profit_margin)
-                rounded_price = round_up_price(final_price)
+                # Limpieza de precios
+                base_price = float(base_price) if base_price else None
+                discount_price = float(discount_price) if discount_price else None
 
-                # Agregamos los datos procesados
+                # Obtener el porcentaje de ganancia del JSON o usar 30% como predeterminado
+                gain_percentage = gain_percentages.get(cleaned_title, 30)
+
+                # Calcular precio final con ganancia
+                final_price = discount_price if discount_price else base_price
+                final_price_with_gain = final_price * (1 + gain_percentage / 100) if final_price else None
+
+                # Agregar datos a la lista
                 all_products.append({
-                    "Producto": clean_title(title),
+                    "Producto": cleaned_title,
+                    "Peso (kg)": weight,
                     "Precio Base ($)": base_price,
                     "Precio con Descuento ($)": discount_price,
-                    "Peso (kg)": extract_weight(title),
-                    "Descuento (%)": (100 * (base_price - discount_price) / base_price) if base_price and discount_price else 0,
-                    "Mínimo de Compra": min_purchase,
                     "Categoría": category_name,
-                    "Porcentaje de Ganancia (%)": profit_margin,
-                    "Precio Final ($)": final_price,
-                    "Precio Redondeado ($)": rounded_price
+                    "Ganancia (%)": gain_percentage,
+                    "Precio Final ($)": final_price_with_gain
                 })
 
-        else:
-            print(f"Error al acceder a la página protegida: {response.status_code} - {category_url}")
-    
-    # Guardamos los datos en un DataFrame
+    # Crear DataFrame
     df = pd.DataFrame(all_products)
 
-    # Crear un archivo Excel con estilos
-    output_file = "productos_biomac.xlsx"
+    # Calcular Ganancia Revendedor ($)
+    def calcular_ganancia_revendedor(row):
+        precio_base = row["Precio Base ($)"]
+        precio_descuento = row["Precio con Descuento ($)"]
+        precio_final = row["Precio Final ($)"]
+
+        # Si hay precio con descuento, usarlo; si no, usar precio base
+        costo = precio_descuento if pd.notna(precio_descuento) else precio_base
+        return precio_final - costo if precio_final else None
+
+    # Aplicar cálculo dinámico
+    df["Ganancia Revendedor ($)"] = df.apply(calcular_ganancia_revendedor, axis=1)
+
+    # Crear archivo Excel con formato de moneda
     wb = Workbook()
     ws = wb.active
-    ws.append(df.columns.tolist())  # Agregar encabezados
+    ws.title = "Productos"
 
-    # Estilo de encabezados
-    header_fill = PatternFill(start_color="4f81bd", end_color="4f81bd", fill_type="solid")
-    header_font = Font(color="FFFFFF", bold=True)
-    border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    # Encabezados
+    headers = [
+        "Producto", "Peso (kg)", "Precio Base ($)", "Precio con Descuento ($)",
+        "Categoría", "Ganancia (%)", "Precio Final ($)", "Precio Redondeado ($)", "Ganancia Revendedor ($)"
+    ]
+    ws.append(headers)
 
-    for col_idx, header in enumerate(df.columns, start=1):
-        cell = ws.cell(row=1, column=col_idx)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.border = border
+    # Rellenar datos con fórmulas dinámicas
+    for i, row in df.iterrows():
+        product = row["Producto"]
+        weight = row["Peso (kg)"]
+        base_price = row["Precio Base ($)"]
+        discount_price = row["Precio con Descuento ($)"]
+        category = row["Categoría"]
+        gain_percentage = row["Ganancia (%)"]
 
-    # Aplicar datos y bordes a las filas
-    category_colors = {
-        "vegetales": "c6efce",  # Verde claro
-        "frutas": "ffc7ce",     # Rosa claro
-        "helados": "cfe2f3",    # Azul claro
-    }
+        # Determinar la fila de Excel (i + 2 porque comienza en la fila 2)
+        excel_row = i + 2
 
-    for index, row in df.iterrows():
-        color = category_colors.get(row["Categoría"], "FFFFFF")  # Default blanco
-        fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
-        font = Font(color="000000")
+        # Fórmula condicional para Precio Final ($)
+        final_price_formula = f"=IF(D{excel_row}<>\"\", D{excel_row}*(1+F{excel_row}/100), C{excel_row}*(1+F{excel_row}/100))"
 
-        for col_idx, value in enumerate(row, start=1):
-            cell = ws.cell(row=index + 2, column=col_idx)
-            cell.value = value
-            cell.fill = fill
-            cell.font = font
-            cell.border = border
+        # Fórmula condicional para Ganancia Revendedor
+        reseller_gain_formula = f"=IF(D{excel_row}<>\"\", H{excel_row}-D{excel_row}, H{excel_row}-C{excel_row})"
 
-    # Agregar la fecha y hora al archivo Excel
-    current_datetime = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    ws.append([])  # Fila vacía
-    ws.append([f"Archivo generado el: {current_datetime}"])  # Agregar fecha y hora
+        # Agregar datos al archivo
+        ws.append([
+            product,
+            weight,
+            base_price,
+            discount_price,
+            category,
+            gain_percentage,
+            final_price_formula,  # Fórmula dinámica para Precio Final
+            f"=ROUNDUP(G{excel_row}, -2)",  # Fórmula Precio Redondeado
+            reseller_gain_formula  # Fórmula dinámica para Ganancia Revendedor
+        ])
 
-    # Agregar filtro en encabezados
-    ws.auto_filter.ref = f"A1:J{len(df) + 1}"  # Ajustar el rango según la cantidad de filas
 
-    # Guardar el archivo Excel
-    wb.save(output_file)
-    print(f"Datos extraídos y guardados en: {output_file}")
+    # Aplicar formato de moneda a las columnas correspondientes
+    for col_letter in ["C", "D", "G", "H", "I"]:  # Columnas de precios
+        for row in range(2, len(df) + 2):  # Desde la fila 2 hasta el final de los datos
+            cell = ws[f"{col_letter}{row}"]
+            cell.number_format = '"$"#,##0.00'  # Formato de moneda con el signo $
+
+    # Estilo de la tabla
+    tab = Table(displayName="ProductosTable", ref=f"A1:I{len(df)+1}")
+    style = TableStyleInfo(
+        name="TableStyleMedium9", showFirstColumn=False, showLastColumn=False,
+        showRowStripes=True, showColumnStripes=True
+    )
+    tab.tableStyleInfo = style
+    ws.add_table(tab)
+
+    # Ajustar ancho de columnas
+    for col in ws.columns:
+        max_length = max(len(str(cell.value)) for cell in col if cell.value) + 2
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max_length
+
+    # Guardar archivo
+    file_name = f"productos_biomac_dinamico_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    wb.save(file_name)
+    print(f"Archivo Excel generado: {file_name}")
 else:
-    print("Error en el inicio de sesión. Verifica tus credenciales.")
+    print("Error al iniciar sesión. Verifica tus credenciales.")
