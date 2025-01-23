@@ -168,66 +168,18 @@ if response.status_code == 200 and "dashboard" not in response.url:
                     "Precio Base ($)": base_price,
                     "Precio con Descuento ($)": discount_price,
                     "Peso (kg)": extract_weight(title),
-                    "Descuento (%)": (100 * (base_price - discount_price) / base_price) if base_price and discount_price else 0,
+                    "Categoría": category_name.capitalize(),
                     "Mínimo de Compra": min_purchase,
-                    "Categoría": category_name,
-                    "Porcentaje de Ganancia (%)": profit_margin,
                     "Precio Final ($)": final_price,
                     "Precio Redondeado ($)": rounded_price
                 })
 
-        else:
-            print(f"Error al acceder a la página protegida: {response.status_code} - {category_url}")
-    
-    # Guardamos los datos en un DataFrame
+    # Convertimos los datos a un DataFrame
     df = pd.DataFrame(all_products)
 
-    # Crear un archivo Excel con estilos
-    output_file = "productos_biomac.xlsx"
-    wb = Workbook()
-    ws = wb.active
-    ws.append(df.columns.tolist())  # Agregar encabezados
-
-    # Estilo de encabezados
-    header_fill = PatternFill(start_color="4f81bd", end_color="4f81bd", fill_type="solid")
-    header_font = Font(color="FFFFFF", bold=True)
-    border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-
-    for col_idx, header in enumerate(df.columns, start=1):
-        cell = ws.cell(row=1, column=col_idx)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.border = border
-
-    # Aplicar datos y bordes a las filas
-    category_colors = {
-        "vegetales": "c6efce",  # Verde claro
-        "frutas": "ffc7ce",     # Rosa claro
-        "helados": "cfe2f3",    # Azul claro
-    }
-
-    for index, row in df.iterrows():
-        color = category_colors.get(row["Categoría"], "FFFFFF")  # Default blanco
-        fill = PatternFill(start_color=color, end_color=color, fill_type="solid")
-        font = Font(color="000000")
-
-        for col_idx, value in enumerate(row, start=1):
-            cell = ws.cell(row=index + 2, column=col_idx)
-            cell.value = value
-            cell.fill = fill
-            cell.font = font
-            cell.border = border
-
-    # Agregar la fecha y hora al archivo Excel
-    current_datetime = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    ws.append([])  # Fila vacía
-    ws.append([f"Archivo generado el: {current_datetime}"])  # Agregar fecha y hora
-
-    # Agregar filtro en encabezados
-    ws.auto_filter.ref = f"A1:J{len(df) + 1}"  # Ajustar el rango según la cantidad de filas
-
-    # Guardar el archivo Excel
-    wb.save(output_file)
-    print(f"Datos extraídos y guardados en: {output_file}")
+    # Guardamos los datos en un archivo Excel
+    excel_file = f"productos_biomac_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    df.to_excel(excel_file, index=False, engine='openpyxl')
+    print(f"Archivo Excel guardado como {excel_file}.")
 else:
-    print("Error en el inicio de sesión. Verifica tus credenciales.")
+    print("Error al iniciar sesión. Verifica tus credenciales.")
